@@ -8,19 +8,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from benchmark.grpc.harness import (
+from benchmark.grpc.clients import (
     NativeGrpcClient,
     RequestResult,
     RequestSpec,
     StreamObservation,
+)
+from benchmark.grpc.conformance import (
     _compare_authoritative_tokens,
     _first_difference_offset,
     classify_repeatability,
     compare_results,
-    run_workload,
-    summarize,
-    write_jsonl,
 )
+from benchmark.grpc.harness import run_workload, write_jsonl
+from benchmark.grpc.metrics import summarize
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 

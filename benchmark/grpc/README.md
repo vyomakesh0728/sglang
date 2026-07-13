@@ -9,6 +9,18 @@ Python protobuf stubs are generated from
 `proto/sglang/runtime/v1/sglang.proto` in a temporary directory. Generated
 bindings are never committed.
 
+The implementation is split by review boundary:
+
+- `harness.py`: workload orchestration, artifacts, metadata, and CLI.
+- `clients.py`: HTTP/native-gRPC clients and stream observations.
+- `metrics.py`: latency and chunk-shape aggregation.
+- `conformance.py`: semantic divergence and repeatability classification.
+
+The harness intentionally does not call `sglang.benchmark.serving.calculate_metrics`:
+that function requires tokenizer-driven serving structures and reports inferred values
+as ITL. This harness must remain standalone and preserve the distinction between
+observed chunk intervals and estimated token-level ITL.
+
 ## Setup
 
 Build/install the current checkout, including the `sglang-grpc` Rust extension:
