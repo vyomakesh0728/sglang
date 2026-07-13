@@ -50,7 +50,9 @@ async def run_workload(
 ) -> tuple[list[RequestResult], float]:
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
-    if requests and warmup:
+    if not requests:
+        return [], 0.0
+    if warmup:
         warmup_results = await asyncio.gather(
             *(
                 client.generate(
