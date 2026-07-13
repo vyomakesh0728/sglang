@@ -184,8 +184,8 @@ class HttpGenerateClient:
                     token_count = _int_or_zero(meta.get("completion_tokens"))
                     now = time.perf_counter()
                     chunk_finished = bool(data.get("finished", False))
-                    finish_reason = data.get("finish_reason") or meta.get(
-                        "finish_reason"
+                    finish_reason = _normalize_finish_reason(
+                        data.get("finish_reason") or meta.get("finish_reason")
                     )
                     _record_stream_observation(
                         result,
@@ -209,7 +209,7 @@ class HttpGenerateClient:
             result.finished = result.finished or bool(previous_text)
             result.output_len = completion_tokens
             result.latency_s = time.perf_counter() - started
-            result.success = result.finished or bool(previous_text)
+            result.success = result.finished
             if not result.success:
                 result.error = "stream ended without output or terminal response"
         except asyncio.CancelledError:
@@ -307,7 +307,9 @@ class NativeGrpcClient:
                 now = time.perf_counter()
                 text = response.text
                 token_count = _int_or_zero(response.meta_info.get("completion_tokens"))
-                finish_reason = response.meta_info.get("finish_reason")
+                finish_reason = _normalize_finish_reason(
+                    response.meta_info.get("finish_reason")
+                )
                 _record_stream_observation(
                     result,
                     now=now,
@@ -328,9 +330,9 @@ class NativeGrpcClient:
             result.generated_text = previous_text
             result.output_len = completion_tokens
             result.latency_s = time.perf_counter() - started
-            result.success = result.finished or bool(previous_text)
+            result.success = result.finished
             if not result.success:
-                result.error = "stream ended without output or terminal response"
+                result.error = "stream ended without an explicit terminal response"
         except asyncio.CancelledError:
             result.error = "cancelled"
             result.latency_s = time.perf_counter() - started
@@ -400,13 +402,14 @@ def _record_stream_observation(
     delta = _text_delta(previous_text, current_text)
     attributed_tokens = max(reported_tokens - previous_tokens, 1 if delta else 0)
     interval = now - most_recent
+    is_first_text = bool(delta) and result.ttft_s == 0
+    if is_first_text:
+        result.ttft_s = now - started
     if not result.observations:
-        if delta:
-            result.ttft_s = now - started
         estimated_tokens = 0
     else:
         result.chunk_intervals_s.append(interval)
-        estimated_tokens = attributed_tokens
+        estimated_tokens = 0 if is_first_text else attributed_tokens
     if estimated_tokens:
         result.estimated_token_itls_s.extend(
             [interval / attributed_tokens] * estimated_tokens
@@ -425,6 +428,22 @@ def _record_stream_observation(
             prefix_monotonic=prefix_monotonic,
         )
     )
+
+
+def _normalize_finish_reason(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        if isinstance(decoded, str):
+            return decoded
+        return json.dumps(decoded, sort_keys=True, separators=(",", ":"))
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return str(value)
 
 
 def _text_delta(previous: str, current: str) -> str:

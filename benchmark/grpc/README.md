@@ -118,8 +118,9 @@ state agree.
 
 For each paired request, conformance reports the first concrete semantic
 failure: missing result, request failure, generated-text mismatch and first
-character offset, output-length mismatch, terminal-state mismatch, or a
-cumulative-stream violation. Chunk-shape differences are reported separately.
+character offset, output-length mismatch, terminal-state mismatch, finish-reason
+mismatch when both transports report one, or a cumulative-stream violation.
+Chunk-shape differences are reported separately.
 
 HTTP and native `TextGenerate` return text, not authoritative output token IDs.
 Token-level comparison is therefore explicitly `unavailable`. The harness does

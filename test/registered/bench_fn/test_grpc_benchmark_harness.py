@@ -2,28 +2,33 @@
 
 import asyncio
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from benchmark.grpc.clients import (
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from benchmark.grpc.clients import (  # noqa: E402
     NativeGrpcClient,
     RequestResult,
     RequestSpec,
     StreamObservation,
 )
-from benchmark.grpc.conformance import (
+from benchmark.grpc.conformance import (  # noqa: E402
     _compare_authoritative_tokens,
     _first_difference_offset,
     classify_repeatability,
     compare_results,
 )
-from benchmark.grpc.harness import run_workload, write_jsonl
-from benchmark.grpc.metrics import summarize
-from sglang.test.ci.ci_register import register_cpu_ci
-from sglang.test.test_utils import CustomTestCase
+from benchmark.grpc.harness import run_workload, write_jsonl  # noqa: E402
+from benchmark.grpc.metrics import summarize  # noqa: E402
+from sglang.test.ci.ci_register import register_cpu_ci  # noqa: E402
+from sglang.test.test_utils import CustomTestCase  # noqa: E402
 
 register_cpu_ci(est_time=5, stage="base-a", runner_config="cpu")
 
@@ -111,7 +116,7 @@ class TestGrpcBenchmarkHarness(CustomTestCase):
         )
         ticks = iter([10.0, 10.1, 10.5, 10.6])
         with patch(
-            "benchmark.grpc.harness.time.perf_counter",
+            "benchmark.grpc.clients.time.perf_counter",
             side_effect=lambda: next(ticks),
         ):
             result = asyncio.run(client.generate(self.spec, 9.0))
@@ -150,11 +155,37 @@ class TestGrpcBenchmarkHarness(CustomTestCase):
             "cumulative-stream-violation",
         )
 
-    def test_empty_stream_is_failure(self):
-        client = NativeGrpcClient("localhost:1", {}, stub=_Stub([]), pb2=_Pb2)
-        result = asyncio.run(client.generate(self.spec, 0.0))
-        self.assertFalse(result.success)
-        self.assertIn("stream ended", result.error)
+    def test_metadata_before_text_does_not_zero_ttft(self):
+        client = NativeGrpcClient(
+            "localhost:1",
+            {},
+            stub=_Stub([_response("", 0), _response("A", 1, finished=True)]),
+            pb2=_Pb2,
+        )
+        ticks = iter([10.0, 10.05, 10.2, 10.3])
+        with patch(
+            "benchmark.grpc.clients.time.perf_counter",
+            side_effect=lambda: next(ticks),
+        ):
+            result = asyncio.run(client.generate(self.spec, 0.0))
+        self.assertAlmostEqual(result.ttft_s, 0.2)
+        self.assertEqual(len(result.chunk_intervals_s), 1)
+        self.assertAlmostEqual(result.chunk_intervals_s[0], 0.15)
+        self.assertEqual(result.estimated_token_itls_s, [])
+
+    def test_empty_and_truncated_streams_are_failures(self):
+        empty_client = NativeGrpcClient("localhost:1", {}, stub=_Stub([]), pb2=_Pb2)
+        empty = asyncio.run(empty_client.generate(self.spec, 0.0))
+        self.assertFalse(empty.success)
+        self.assertIn("stream ended", empty.error)
+
+        truncated_client = NativeGrpcClient(
+            "localhost:1", {}, stub=_Stub([_response("partial", 1)]), pb2=_Pb2
+        )
+        truncated = asyncio.run(truncated_client.generate(self.spec, 0.0))
+        self.assertFalse(truncated.success)
+        self.assertEqual(truncated.generated_text, "partial")
+        self.assertIn("explicit terminal response", truncated.error)
 
     def test_unknown_sampling_field_fails_before_transport(self):
         stub = _Stub([])
@@ -175,6 +206,22 @@ class TestGrpcBenchmarkHarness(CustomTestCase):
         divergence = report["checks"][0]["first_divergence"]
         self.assertEqual(divergence["kind"], "generated-text-mismatch")
         self.assertEqual(divergence["first_differing_character_offset"], 0)
+
+    def test_finish_reason_is_normalized_and_compared_when_available(self):
+        client = NativeGrpcClient(
+            "localhost:1",
+            {},
+            stub=_Stub([_response("ABC", 3, finished=True, finish_reason='"length"')]),
+            pb2=_Pb2,
+        )
+        candidate = asyncio.run(client.generate(self.spec, 0.0))
+        self.assertEqual(candidate.finish_reason, "length")
+        baseline = _result("http", self.spec)
+        baseline.finish_reason = "stop"
+        divergence = compare_results([baseline], [candidate])["checks"][0][
+            "first_divergence"
+        ]
+        self.assertEqual(divergence["kind"], "finish-reason-mismatch")
 
     def test_chunk_shape_is_diagnostic_not_semantic_failure(self):
         left = _result("http", self.spec)

@@ -118,6 +118,16 @@ def _first_semantic_divergence(
             "baseline": baseline.finished,
             "candidate": candidate.finished,
         }
+    if (
+        baseline.finish_reason is not None
+        and candidate.finish_reason is not None
+        and baseline.finish_reason != candidate.finish_reason
+    ):
+        return {
+            "kind": "finish-reason-mismatch",
+            "baseline": baseline.finish_reason,
+            "candidate": candidate.finish_reason,
+        }
     if baseline.cumulative_stream_violation or candidate.cumulative_stream_violation:
         return {
             "kind": "cumulative-stream-violation",
